@@ -18,7 +18,6 @@ package trie
 
 import (
 	"bytes"
-	"encoding/gob"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -157,10 +156,56 @@ func (t *StateTrie) MustUpdate(key, value []byte) {
 	t.getSecKeyCache()[string(hk)] = common.CopyBytes(key)
 }
 
-// all the updates should call this
-// func (t *StateTrie) updateLinkedTrie(address common.Address) {
+// /sep
+func getRight(address common.Address) []byte {
+	gottenData, err := newDB.Get(append(address[:], 1))
+	if err != nil {
+		return []byte("0")
+	}
+	return gottenData
+}
+func getLeft(address common.Address) []byte {
+	gottenData, err := newDB.Get(append(address[:], 2))
+	if err != nil {
+		return []byte("0")
+	}
+	return gottenData
+}
 
-// }
+// /sep
+// setters
+func setRight(address common.Address, addressR common.Address) {
+	newDB.Put(append(address[:], 1), addressR[:])
+}
+func setLeft(address common.Address, addressL common.Address) {
+	newDB.Put(append(address[:], 2), addressL[:])
+}
+
+// /sep
+// all the updates should call this
+func updateLinkedTrie(address common.Address) error {
+	gottenlast, err := newDB.Get([]byte("last"))
+	if err != nil { ///only the fist time
+		newDB.Put([]byte("first"), address[:])
+		newDB.Put([]byte("last"), address[:])
+	} else {
+		if bytes.Equal(gottenlast, address[:]) {
+			return nil
+		}
+		gottenfirst, _ := newDB.Get([]byte("first"))
+		if bytes.Equal(gottenfirst, address[:]) {
+			newDB.Put([]byte("first"), getRight(address))
+			setRight(common.Address(gottenlast), address)
+			newDB.Put([]byte("last"), address[:])
+			setLeft(address, common.Address(gottenlast))
+			return nil
+		}
+		setRight(common.Address(gottenlast), address)
+		newDB.Put([]byte("last"), address[:])
+		setLeft(address, common.Address(gottenlast))
+	}
+	return nil
+}
 
 // UpdateStorage associates key with value in the trie. Subsequent calls to
 // Get will return value. If value has length zero, any existing value
@@ -181,42 +226,13 @@ func (t *StateTrie) UpdateStorage(_ common.Address, key, value []byte) error {
 	return nil
 }
 
-// /sep
-func structToBytes(account LinkedAccount) []byte {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(account)
-	if err != nil {
-		return nil
-	}
-	return buf.Bytes()
-}
-
-// /sep
-func BytesToStruct(accountByte []byte) LinkedAccount {
-	account := LinkedAccount{}
-	//buf := bytes.NewBuffer(accountByte)
-	dec := gob.NewDecoder(bytes.NewReader(accountByte))
-	dec.Decode(account)
-	fmt.Println("rrrrrrrrrr", account.lastmodified)
-	return account
-}
-
-// /sep
-type LinkedAccount struct {
-	next         []byte
-	prv          []byte
-	lastmodified uint64
-}
-
 // UpdateAccount will abstract the write of an account to the secure trie.
 func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccount) error {
+	updateLinkedTrie(address)
 	accountGotten, _ := newDB.Get([]byte("first"))
-	fmt.Printf("sssssssssssss: %x\n", accountGotten)
-	structGotten, _ := newDB.Get([]byte("theStruct"))
-	BytesToStruct(structGotten)
-	newDB.Put([]byte("first"), address[:])
-	newDB.Put([]byte("theStruct"), structToBytes(LinkedAccount{next: address[:], prv: address[:], lastmodified: 69}))
+	fmt.Printf("firtsssssssssssss: %x\n", accountGotten)
+	accountGotten2, _ := newDB.Get([]byte("last"))
+	fmt.Printf("lasssssssssssssst: %x\n", accountGotten2)
 	hk := t.hashKey(address.Bytes())
 	data, err := rlp.EncodeToBytes(acc)
 	if err != nil {
