@@ -3,7 +3,7 @@ cd build/bin
 rm private_key.txt
 rm password.txt
 rm -r node
-rm -r bin
+rm -r db
 echo '9bd8e3ec625617614e36725394a34bd15ccb25d58a33261347452f7e40e8aa19' >> private_key.txt
 echo 'sepehr1381' >> password.txt
 ./geth --datadir node/ --password password.txt account import  private_key.txt

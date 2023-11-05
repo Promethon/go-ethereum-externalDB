@@ -19,6 +19,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -88,11 +89,15 @@ type Trie interface {
 	// by the caller while they are stored in the trie. If a node was not found in the
 	// database, a trie.MissingNodeError is returned.
 	UpdateStorage(addr common.Address, key, value []byte) error
+	///sep
+	UpdateStorage2(addr common.Address, blockNumber *big.Int, key, value []byte, isLast bool) error
 
 	// UpdateAccount abstracts an account write to the trie. It encodes the
 	// provided account object with associated algorithm and then updates it
 	// in the trie with provided address.
 	UpdateAccount(address common.Address, account *types.StateAccount) error
+	///sep
+	UpdateAccount2(address common.Address, blockNumber *big.Int, account *types.StateAccount, isLast bool) error
 
 	// UpdateContractCode abstracts code write to the trie. It is expected
 	// to be moved to the stateWriter interface when the latter is ready.
@@ -104,6 +109,8 @@ type Trie interface {
 
 	// DeleteAccount abstracts an account deletion from the trie.
 	DeleteAccount(address common.Address) error
+	///sep
+	DeleteAccounts(blockNumber *big.Int)
 
 	// Hash returns the root hash of the trie. It does not write to the database and
 	// can be used even if the trie doesn't have one.

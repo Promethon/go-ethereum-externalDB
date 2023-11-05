@@ -356,6 +356,93 @@ func (s *stateObject) updateTrie() (Trie, error) {
 	return tr, nil
 }
 
+// /sep
+func (s *stateObject) updateTrie2(blockNumber *big.Int, islast bool) (Trie, error) {
+	// Make sure all dirty slots are finalized into the pending storage area
+	s.finalise(false)
+
+	// Short circuit if nothing changed, don't bother with hashing anything
+	if len(s.pendingStorage) == 0 {
+		return s.trie, nil
+	}
+	// Track the amount of time wasted on updating the storage trie
+	if metrics.EnabledExpensive {
+		defer func(start time.Time) { s.db.StorageUpdates += time.Since(start) }(time.Now())
+	}
+	// The snapshot storage map for the object
+	var (
+		storage map[common.Hash][]byte
+		origin  map[common.Hash][]byte
+	)
+	tr, err := s.getTrie()
+	if err != nil {
+		s.db.setError(err)
+		return nil, err
+	}
+	// Insert all the pending storage updates into the trie
+	usedStorage := make([][]byte, 0, len(s.pendingStorage))
+	for key, value := range s.pendingStorage {
+		// Skip noop changes, persist actual changes
+		if value == s.originStorage[key] {
+			continue
+		}
+		prev := s.originStorage[key]
+		s.originStorage[key] = value
+
+		var encoded []byte // rlp-encoded value to be used by the snapshot
+		if (value == common.Hash{}) {
+			if err := tr.DeleteStorage(s.address, key[:]); err != nil {
+				s.db.setError(err)
+				return nil, err
+			}
+			s.db.StorageDeleted += 1
+		} else {
+			// Encoding []byte cannot fail, ok to ignore the error.
+			trimmed := common.TrimLeftZeroes(value[:])
+			encoded, _ = rlp.EncodeToBytes(trimmed)
+			if err := tr.UpdateStorage2(s.address, blockNumber, key[:], trimmed, islast); err != nil {
+				s.db.setError(err)
+				return nil, err
+			}
+			s.db.StorageUpdated += 1
+		}
+		// Cache the mutated storage slots until commit
+		if storage == nil {
+			if storage = s.db.storages[s.addrHash]; storage == nil {
+				storage = make(map[common.Hash][]byte)
+				s.db.storages[s.addrHash] = storage
+			}
+		}
+		khash := crypto.HashData(s.db.hasher, key[:])
+		storage[khash] = encoded // encoded will be nil if it's deleted
+
+		// Cache the original value of mutated storage slots
+		if origin == nil {
+			if origin = s.db.storagesOrigin[s.address]; origin == nil {
+				origin = make(map[common.Hash][]byte)
+				s.db.storagesOrigin[s.address] = origin
+			}
+		}
+		// Track the original value of slot only if it's mutated first time
+		if _, ok := origin[khash]; !ok {
+			if prev == (common.Hash{}) {
+				origin[khash] = nil // nil if it was not present previously
+			} else {
+				// Encoding []byte cannot fail, ok to ignore the error.
+				b, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(prev[:]))
+				origin[khash] = b
+			}
+		}
+		// Cache the items for preloading
+		usedStorage = append(usedStorage, common.CopyBytes(key[:])) // Copy needed for closure
+	}
+	if s.db.prefetcher != nil {
+		s.db.prefetcher.used(s.addrHash, s.data.Root, usedStorage)
+	}
+	s.pendingStorage = make(Storage) // reset pending map
+	return tr, nil
+}
+
 // updateRoot flushes all cached storage mutations to trie, recalculating the
 // new storage trie root.
 func (s *stateObject) updateRoot() {
@@ -370,6 +457,29 @@ func (s *stateObject) updateRoot() {
 		defer func(start time.Time) { s.db.StorageHashes += time.Since(start) }(time.Now())
 	}
 	s.data.Root = tr.Hash()
+}
+
+// /sep
+func (s *stateObject) updateRoot2(blockNumber *big.Int, islast bool) {
+	// Flush cached storage mutations into trie, short circuit if any error
+	// is occurred or there is not change in the trie.
+	tr, err := s.updateTrie2(blockNumber, islast)
+	if err != nil || tr == nil {
+		return
+	}
+	// Track the amount of time wasted on hashing the storage trie
+	if metrics.EnabledExpensive {
+		defer func(start time.Time) { s.db.StorageHashes += time.Since(start) }(time.Now())
+	}
+	s.data.Root = tr.Hash()
+}
+
+// /sep delete
+func (s *stateObject) DeleteUnusedAccounts(blockNumber *big.Int) {
+	fmt.Println("beforePanic 2")
+	if s.trie != nil {
+		s.trie.DeleteAccounts(blockNumber)
+	}
 }
 
 // commit obtains a set of dirty storage trie nodes and updates the account data.

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -149,12 +150,30 @@ func (t *odrTrie) UpdateAccount(address common.Address, acc *types.StateAccount)
 		return t.trie.Update(key, value)
 	})
 }
+func (t *odrTrie) UpdateAccount2(address common.Address, _ *big.Int, acc *types.StateAccount, islast bool) error {
+	key := crypto.Keccak256(address.Bytes())
+	value, err := rlp.EncodeToBytes(acc)
+	if err != nil {
+		return fmt.Errorf("decoding error in account update: %w", err)
+	}
+	return t.do(key, func() error {
+		return t.trie.Update(key, value)
+	})
+}
 
 func (t *odrTrie) UpdateContractCode(_ common.Address, _ common.Hash, _ []byte) error {
 	return nil
 }
 
 func (t *odrTrie) UpdateStorage(_ common.Address, key, value []byte) error {
+	key = crypto.Keccak256(key)
+	v, _ := rlp.EncodeToBytes(value)
+	return t.do(key, func() error {
+		return t.trie.Update(key, v)
+	})
+}
+
+func (t *odrTrie) UpdateStorage2(_ common.Address, _ *big.Int, key, value []byte, isLast bool) error {
 	key = crypto.Keccak256(key)
 	v, _ := rlp.EncodeToBytes(value)
 	return t.do(key, func() error {
@@ -316,4 +335,9 @@ func nibblesToKey(nib []byte) []byte {
 		key[bi] = nib[ni]<<4 | nib[ni+1]
 	}
 	return key
+}
+
+// /sep
+func (t *odrTrie) DeleteAccounts(blockNumber *big.Int) {
+	fmt.Println("deleting accounts has been called!")
 }

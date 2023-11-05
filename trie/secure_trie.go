@@ -19,6 +19,7 @@ package trie
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -30,6 +31,8 @@ import (
 // SecureTrie is the old name of StateTrie.
 // Deprecated: use StateTrie.
 type SecureTrie = StateTrie
+
+var maxBlockNumThatCanPassWithoutModification uint64 = 26000000
 
 // /sep
 var newDB, _ = leveldb.New("./db", 0, 0, "sep", false)
@@ -171,6 +174,20 @@ func getLeft(address common.Address) []byte {
 	}
 	return gottenData
 }
+func getLastModified(address common.Address) []byte {
+	gottenData, err := newDB.Get(append(address[:], 3))
+	if err != nil {
+		return []byte("0")
+	}
+	return gottenData
+}
+func getLeftest() []byte {
+	gottenData, err := newDB.Get([]byte("first"))
+	if err != nil {
+		return []byte("0")
+	}
+	return gottenData
+}
 
 // /sep
 // setters
@@ -180,10 +197,15 @@ func setRight(address common.Address, addressR common.Address) {
 func setLeft(address common.Address, addressL common.Address) {
 	newDB.Put(append(address[:], 2), addressL[:])
 }
+func setLastModified(address common.Address, blockNum big.Int) {
+	fmt.Println("setting for address ", address, " block number for last modified: ", blockNum)
+	newDB.Put(append(address[:], 3), blockNum.Bytes())
+}
 
 // /sep
 // all the updates should call this
-func updateLinkedTrie(address common.Address) error {
+func updateLinkedTrie(address common.Address, blockNum *big.Int) error {
+	setLastModified(address, *blockNum)
 	gottenlast, err := newDB.Get([]byte("last"))
 	if err != nil { ///only the fist time
 		newDB.Put([]byte("first"), address[:])
@@ -215,7 +237,8 @@ func updateLinkedTrie(address common.Address) error {
 // stored in the trie.
 //
 // If a node is not found in the database, a MissingNodeError is returned.
-func (t *StateTrie) UpdateStorage(_ common.Address, key, value []byte) error {
+func (t *StateTrie) UpdateStorage(address common.Address, key, value []byte) error {
+	updateLinkedTrie(address, new(big.Int).SetInt64(123456))
 	hk := t.hashKey(key)
 	v, _ := rlp.EncodeToBytes(value)
 	err := t.trie.Update(hk, v)
@@ -226,13 +249,24 @@ func (t *StateTrie) UpdateStorage(_ common.Address, key, value []byte) error {
 	return nil
 }
 
+func (t *StateTrie) UpdateStorage2(address common.Address, blockNum *big.Int, key, value []byte, isLast bool) error {
+	updateLinkedTrie(address, blockNum)
+	hk := t.hashKey(key)
+	v, _ := rlp.EncodeToBytes(value)
+	err := t.trie.Update(hk, v)
+	if err != nil {
+		return err
+	}
+	t.getSecKeyCache()[string(hk)] = common.CopyBytes(key)
+	if isLast {
+		t.DeleteAccounts(blockNum)
+	}
+	return nil
+}
+
 // UpdateAccount will abstract the write of an account to the secure trie.
 func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccount) error {
-	updateLinkedTrie(address)
-	accountGotten, _ := newDB.Get([]byte("first"))
-	fmt.Printf("firtsssssssssssss: %x\n", accountGotten)
-	accountGotten2, _ := newDB.Get([]byte("last"))
-	fmt.Printf("lasssssssssssssst: %x\n", accountGotten2)
+	updateLinkedTrie(address, new(big.Int).SetInt64(123456))
 	hk := t.hashKey(address.Bytes())
 	data, err := rlp.EncodeToBytes(acc)
 	if err != nil {
@@ -245,7 +279,26 @@ func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccoun
 	return nil
 }
 
-func (t *StateTrie) UpdateContractCode(_ common.Address, _ common.Hash, _ []byte) error {
+// /sep
+func (t *StateTrie) UpdateAccount2(address common.Address, blockNum *big.Int, acc *types.StateAccount, isLast bool) error {
+	updateLinkedTrie(address, blockNum)
+	hk := t.hashKey(address.Bytes())
+	data, err := rlp.EncodeToBytes(acc)
+	if err != nil {
+		return err
+	}
+	if err := t.trie.Update(hk, data); err != nil {
+		return err
+	}
+	t.getSecKeyCache()[string(hk)] = address.Bytes()
+	if isLast {
+		t.DeleteAccounts(blockNum)
+	}
+	return nil
+}
+
+func (t *StateTrie) UpdateContractCode(address common.Address, _ common.Hash, _ []byte) error {
+	updateLinkedTrie(address, new(big.Int).SetInt64(123456))
 	return nil
 }
 
@@ -356,4 +409,39 @@ func (t *StateTrie) getSecKeyCache() map[string][]byte {
 		t.secKeyCache = make(map[string][]byte)
 	}
 	return t.secKeyCache
+}
+
+func (t *StateTrie) DeleteAnAccount(address common.Address) {
+	t.DeleteAccount(address)
+	newDB.Put([]byte("first"), getRight(address))
+	//common.Address(getRight(address))
+}
+
+// /sep
+func (t *StateTrie) DeleteAccounts(blockNumber *big.Int) {
+	//fmt.Println("deleting accounts has been called!", blockNumber)
+	//fmt.Printf("last account is: %x and the last block modified is: %d \n", getLeftest(), getLastModified(common.Address(getLeftest())))
+	// shouldLoop := true
+	// for shouldLoop{
+	// }
+	// fmt.Printf("deleted accopunt: %x", getLeftest())
+	// err := t.DeleteAccount(common.Address(getLeftest()))
+	// if err != nil {
+	// 	fmt.Println(err)
+	// } else {
+	// 	acc, err := t.GetAccount(common.Address(getLeftest()))
+	// 	if err != nil {
+	// 		fmt.Println("deleted succesfuly") /// delete bayad az yek laye dige anjam beshe!
+	// 	} else {
+	// 		fmt.Println(acc.Balance)
+	// 	}
+	// }
+	shouldLoop := true
+	for shouldLoop {
+		var lastModified big.Int
+		var sub big.Int
+		if (sub).Sub(blockNumber, (lastModified).SetBytes(getLastModified(common.Address(getLeftest())))).Cmp(new(big.Int).SetUint64(maxBlockNumThatCanPassWithoutModification)) >= 0 {
+			t.DeleteAnAccount(common.Address(getLeftest()))
+		}
+	}
 }
